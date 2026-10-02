@@ -274,7 +274,13 @@ impl VelloRenderer {
         console_log!("VelloRenderer: initializing WebGPU...");
 
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::BROWSER_WEBGPU | wgpu::Backends::GL,
+            // WebGPU only. Adding `Backends::GL` here lets wgpu silently pick a
+            // WebGL emulation backend when WebGPU is unavailable; the handles we
+            // then extract are NOT real WebGPU `GPUDevice`/`GPUAdapter` objects
+            // and PixiJS (which requires WebGPU for the ExternalSource texture
+            // sharing) ends up with a black canvas. Fail fast instead so the
+            // missing WebGPU is reported by the caller.
+            backends: wgpu::Backends::BROWSER_WEBGPU,
             ..Default::default()
         });
 
@@ -295,14 +301,24 @@ impl VelloRenderer {
             adapter_limits.max_samplers_per_shader_stage,
         );
 
-        // Start from defaults (Chrome auto-raises most limits) and only
-        // override the specific limits we need for large atlas textures.
-        let mut required_limits = wgpu::Limits::default();
+        // Inherit every limit from the adapter instead of starting from
+        // wgpu::Limits::default(). The default limits are far below what a
+        // WebGPU-capable browser advertises (maxBindGroups, storage buffers,
+        // per-stage sampled textures, ...). PixiJS is handed this device and
+        // sizes its bind groups / pipelines from `device.limits`; a device
+        // built on the low defaults makes some Pixi pipelines impossible and
+        // the canvas stays black with no JS error. Mirroring the adapter
+        // gives Pixi exactly what it would have requested itself.
+        let mut required_limits = adapter_limits.clone();
+        // featureLevel / usage flags that wgpu fills in for defaults but the
+        // adapter reports as 0 in some backends — keep the adapter values.
         required_limits.max_texture_dimension_2d = adapter_limits.max_texture_dimension_2d;
         required_limits.max_buffer_size = adapter_limits.max_buffer_size;
-        required_limits.max_storage_buffer_binding_size = adapter_limits.max_storage_buffer_binding_size;
-        console_log!("VelloRenderer: maxTexDim2D={} maxBufSize={}",
-            required_limits.max_texture_dimension_2d, required_limits.max_buffer_size);
+        required_limits.max_storage_buffer_binding_size =
+            adapter_limits.max_storage_buffer_binding_size;
+        console_log!("VelloRenderer: maxTexDim2D={} maxBufSize={} maxBindGroups={}",
+            required_limits.max_texture_dimension_2d, required_limits.max_buffer_size,
+            required_limits.max_bind_groups);
 
         let (device, queue) = adapter
             .request_device(
