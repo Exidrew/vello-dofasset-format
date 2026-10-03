@@ -1763,3 +1763,123 @@ impl VelloRenderer {
         asset.animations.iter().map(|a| a.name.clone()).collect()
     }
 }
+
+/// CPU-only `.dofasset` rasterizer — no `wgpu`/WebGPU/`GPUDevice` anywhere in
+/// this struct. Exists as the fallback path for devices where WebGPU is
+/// unavailable or unreliable (see `webgpu-diagnostics.ts` on the client).
+/// Deliberately independent from `VelloRenderer` (no shared state) so this
+/// increment doesn't risk the existing GPU pipeline. Scope matches
+/// `scene_builder_cpu`: body-part frames + base/delta z-order, no
+/// accessories yet.
+#[wasm_bindgen]
+pub struct CpuRenderer {
+    assets: HashMap<u32, DofAsset>,
+}
+
+#[wasm_bindgen]
+impl CpuRenderer {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> CpuRenderer {
+        console_error_panic_hook::set_once();
+        CpuRenderer {
+            assets: HashMap::new(),
+        }
+    }
+
+    /// Decode a `.dofasset` into `id`. Mirrors `VelloRenderer::load_asset`
+    /// (caller-assigned id, magic-byte validation) so the two renderers can
+    /// share the same asset-id bookkeeping on the TS side.
+    #[wasm_bindgen(js_name = "loadAsset")]
+    pub fn load_asset(&mut self, id: u32, bytes: &[u8]) -> bool {
+        if bytes.len() < 4 || &bytes[0..4] != b"DASF" {
+            return false;
+        }
+        let asset = format::load(bytes);
+        self.assets.insert(id, asset);
+        true
+    }
+
+    /// Mirrors `VelloRenderer::free_asset`.
+    #[wasm_bindgen(js_name = "freeAsset")]
+    pub fn free_asset(&mut self, id: u32) {
+        self.assets.remove(&id);
+    }
+
+    #[wasm_bindgen(js_name = "getAnimationNames")]
+    pub fn get_animation_names(&self, asset_id: u32) -> Vec<String> {
+        let Some(asset) = self.assets.get(&asset_id) else {
+            return Vec::new();
+        };
+        asset.animations.iter().map(|a| a.name.clone()).collect()
+    }
+
+    /// Mirrors `VelloRenderer::get_animation_meta` (no accessories — out of
+    /// scope for the CPU path for now). Returns `{ width, height, anchorX,
+    /// anchorY }`, or `null` if the asset/animation isn't found.
+    #[wasm_bindgen(js_name = "getAnimationMeta")]
+    pub fn get_animation_meta(&self, asset_id: u32, animation: &str, resolution: f32) -> JsValue {
+        let Some(asset) = self.assets.get(&asset_id) else {
+            return JsValue::NULL;
+        };
+        let meta = scene_builder::compute_animation_render_meta(asset, animation, resolution, &[]);
+        let obj = js_sys::Object::new();
+        let _ = js_sys::Reflect::set(&obj, &"width".into(), &JsValue::from(meta.canvas_width));
+        let _ = js_sys::Reflect::set(&obj, &"height".into(), &JsValue::from(meta.canvas_height));
+        let _ = js_sys::Reflect::set(&obj, &"anchorX".into(), &JsValue::from(meta.anchor_x));
+        let _ = js_sys::Reflect::set(&obj, &"anchorY".into(), &JsValue::from(meta.anchor_y));
+        obj.into()
+    }
+
+    /// Rasterize one frame entirely on the CPU. `colors` is an optional
+    /// 3-element `[r, g, b]` (packed 0xRRGGBB) player-color array, or an
+    /// empty array for "no replacement". Returns `{ rgba, width, height }`
+    /// (straight-alpha RGBA8, row-major) — upload directly via
+    /// `Texture.fromBuffer` on the JS side, no `ExternalSource` involved.
+    #[wasm_bindgen(js_name = "renderFrame")]
+    pub fn render_frame(
+        &self,
+        asset_id: u32,
+        animation: &str,
+        frame_index: u32,
+        resolution: f32,
+        colors: Vec<u32>,
+    ) -> JsValue {
+        let Some(asset) = self.assets.get(&asset_id) else {
+            return JsValue::NULL;
+        };
+
+        let player_colors: Option<[u32; 3]> = if colors.len() >= 3 {
+            Some([colors[0], colors[1], colors[2]])
+        } else {
+            None
+        };
+
+        let meta = scene_builder::compute_animation_render_meta(asset, animation, resolution, &[]);
+
+        let Some(frame) = dofasset_renderer::scene_builder_cpu::build_frame_pixmap_cpu(
+            asset,
+            animation,
+            frame_index as usize,
+            player_colors.as_ref(),
+            resolution,
+            (meta.bounds_offset_x, meta.bounds_offset_y),
+            meta.canvas_width,
+            meta.canvas_height,
+        ) else {
+            return JsValue::NULL;
+        };
+
+        let result = js_sys::Object::new();
+        let rgba = js_sys::Uint8Array::from(frame.rgba.as_slice());
+        let _ = js_sys::Reflect::set(&result, &"rgba".into(), &rgba);
+        let _ = js_sys::Reflect::set(&result, &"width".into(), &JsValue::from(frame.width));
+        let _ = js_sys::Reflect::set(&result, &"height".into(), &JsValue::from(frame.height));
+        result.into()
+    }
+}
+
+impl Default for CpuRenderer {
+    fn default() -> Self {
+        Self::new()
+    }
+}

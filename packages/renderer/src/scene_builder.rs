@@ -299,7 +299,10 @@ fn render_frame_parts_with_accessories(
     }
 }
 
-fn resolve_color(
+/// Shared by the GPU (`vello::Scene`) and CPU (`vello_cpu::RenderContext`)
+/// scene builders — kept here as the single source of truth so both
+/// backends resolve player-color zone replacement identically.
+pub(crate) fn resolve_color(
     color: Color,
     zone_id: u8,
     replacements: &Option<HashMap<u32, Color>>,
@@ -341,7 +344,7 @@ fn resolve_color(
 ///   ~0.7 px regardless of transform depth, matching SVG's native behavior.
 ///   We still floor at 1 screen pixel so sub-pixel hairlines remain visible.
 #[inline]
-fn resolve_stroke_width(
+pub(crate) fn resolve_stroke_width(
     width: f32,
     mode: StrokeWidthMode,
     transform: Affine,
@@ -381,7 +384,7 @@ fn transform_scale(t: Affine) -> f64 {
 /// when the id is 0 / out of range. Used by `render_draw_command` to
 /// optionally wrap a single draw in a `push_layer` / `pop_layer` pair
 /// that confines rasterisation to the SWF clipDepth shape.
-fn resolve_clip_mask<'a>(asset: &'a DofAsset, clip_mask_id: u32) -> Option<&'a vello::peniko::kurbo::BezPath> {
+pub(crate) fn resolve_clip_mask<'a>(asset: &'a DofAsset, clip_mask_id: u32) -> Option<&'a vello::peniko::kurbo::BezPath> {
     if clip_mask_id == 0 {
         return None;
     }
@@ -389,7 +392,7 @@ fn resolve_clip_mask<'a>(asset: &'a DofAsset, clip_mask_id: u32) -> Option<&'a v
     asset.clip_masks.get(idx).map(|m| &m.path)
 }
 
-fn clip_mask_transform(asset: &DofAsset, clip_mask_id: u32) -> Affine {
+pub(crate) fn clip_mask_transform(asset: &DofAsset, clip_mask_id: u32) -> Affine {
     if clip_mask_id == 0 {
         return Affine::IDENTITY;
     }
