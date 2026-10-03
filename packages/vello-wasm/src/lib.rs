@@ -316,6 +316,13 @@ impl VelloRenderer {
         required_limits.max_buffer_size = adapter_limits.max_buffer_size;
         required_limits.max_storage_buffer_binding_size =
             adapter_limits.max_storage_buffer_binding_size;
+        // PixiJS sizes its batch shaders from maxSampledTexturesPerShaderStage
+        // and binds one sampler per texture. Some adapters (e.g. Intel/Mesa
+        // Vulkan on Linux) report 32 sampled textures but only 16 samplers,
+        // which makes every Pixi batch pipeline invalid. Clamp so both match.
+        required_limits.max_sampled_textures_per_shader_stage = adapter_limits
+            .max_sampled_textures_per_shader_stage
+            .min(adapter_limits.max_samplers_per_shader_stage);
         console_log!("VelloRenderer: maxTexDim2D={} maxBufSize={} maxBindGroups={}",
             required_limits.max_texture_dimension_2d, required_limits.max_buffer_size,
             required_limits.max_bind_groups);
